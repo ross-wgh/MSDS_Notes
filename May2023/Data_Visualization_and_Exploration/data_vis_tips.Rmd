@@ -1,0 +1,334 @@
+---
+title: "Data Visualization Tips"
+author: "Ross Woleben"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+library(tidyverse)
+library(colorspace)
+library(patchwork)
+library(ggiraph)
+library(sf)
+library(rnaturalearth)
+library(tidycensus)
+```
+
+This document is a supplement to my website post [Data Visualization Tips](https://www.rosswoleben.com/projects/data-vis), where I discuss the most interesting and valuable tips I've learned throughout my "Data Visualization and Exploration" course. The post on my website is a codeless overview that explains the general ideas and motivations of data visualization concepts, whereas this R Markdown document provides the code, plots, and some more detailed information about the topics I touched upon.
+
+## General R Tips and Tricks
+
+Before getting too far into the weeds, here are some useful features in R that I learned from this class:
+
+For years, `tidyverse` packages have used the “pipe” operator (`%>%`) as an alternative syntax of nesting multiple layers of functions. In May 2021, R added its own native “pipe” operator (`|>`) so if you no longer have to load in `tidyverse` if you want to do some quick function nesting.
+```{r}
+# Define a vector with numbers ranging from 1 through 5
+numbers <- c(1,2,3,4,5)
+
+# Calling the sum function conventionally
+sum(numbers)
+
+# Calling the sum function using the tidyverse pipe operator
+numbers %>% sum()
+
+# Calling the sum function using R's new-ish native pipe operator
+numbers |> sum()
+```
+
+The next tip isn't so much a programming feature of R, but is still pretty useful, especially if you are sharing code with others.
+`Control + Shift + A` is a keyboard shortcut in RStudio that "beautifies" your R code. Demonstrating this is a bit tricky, so if you're an R programmer, try and beatify some code in your own RStudio Session. 
+
+I also learned more about the technical elements of R such as functionals and quoting functions.
+
+Functionals are functions that themselves take in one or more functions as parameters. During the course, we would often use the `map()` function, which takes a vector and a function as an input and maps each element in that vector onto the function. This example shows the basic usage; in class, we would often use it to change details of plots.
+```{r}
+# Usage of map() function
+cube <- function(x) x^3
+map(1:5, cube)
+```
+
+Quoting functions take arguments, but don't immediately evaluate them. This concept may seem pointless at first, but it has several use cases such as passing arguments to other functions and debugging. `ggplot` uses the quoting function `aes()` to specify the aesthetics of a plot.
+```{r}
+# expr is a quoting function that can be used to illustrate this concept
+
+# Note that the output of this function is 1 + 2 + 3 + 4 and not 10
+expr(1 + 2 + 9 + 10)
+```
+
+Now we dive into the tips that will immediately make your plots better. We'll use the Bob Ross Paintings dataset (from Jared Wilber via @frankiethull) and gradually make our plots better with each of the next three topics: Themes and Labels, Ordering, and Color.
+
+## Themes and Labels
+Before this semester, I would usually use the `xlab()` and `ylab()` ggplot functions to elucidate the meaning of axes, which isn't bad, but still leaves much to be desired. Following my professor's suggestion, I now use ggplot's `scale_x/y_...()` functions even when just trying to change axes name as typing it in makes me subconsciously think if I should change anything else about the axes, such as tick marks, tick labels, or some type of mathematical transformation. This little trick has done wonders for me, and I now use it every time I make a plot. Furthermore, I previously never bothered using any themes. It's hard to believe that I was this lazy before, especially when adding ` + theme_minimal()` to the end of your plot code immediately makes it look better. 
+
+Let's apply these ideas to the Bob Ross Paintings data to see the difference it makes.
+
+```{r}
+
+# Read in data from GitHub repository
+paints <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-02-21/bob_ross.csv', show_col_types = F)
+```
+
+```{r, echo = FALSE}
+# This code block cleans data to make it much more convenient to plot
+
+paint_names <- colnames(paints)[10:27]
+# Define function to extract sums from columns
+col_sums <- function(column) {
+  sum(paints[, column])
+}
+
+# Use map function (mentioned above) to extract the frequencies of colors into one vector
+frequencies <- unlist(map(paint_names, col_sums))
+
+# Use gsub function to make all color names more readable (replace underscores with spaces)
+paint_names <- gsub("_", " ", paint_names)
+
+# The dataset doesn't define colors very conveniently, so its easier to define it as its own vector
+hex_codes <- c("#000000", "#DB0000", '#8A3324', '#FFEC00', '#5F2E1F', '#CD5C5C',
+               '#FFB800', '#000000', '#FFFFFF', '#000000', '#0C0040', '#102E3C',
+               '#021E44', '#0A3410', '#FFFFFF', '#221B15', '#C79B00', '#4E1500')
+
+# Set up new dataframe to make plotting much more convenient
+paint_data <- data.frame(color_name = paint_names, frequency = frequencies, hex_value = hex_codes)
+```
+
+```{r}
+# Plot with ggplots default settings
+# *paint_data is the resulting dataframe after the paints dataframe was cleaned, 
+# see .rmd file for cleaning process
+ggplot(paint_data, aes(x = frequency, y = color_name)) + 
+  geom_col()
+
+# Plot after adjusting Themes and Labels
+ggplot(paint_data, aes(x = frequency, y = color_name)) + 
+  geom_col() + 
+  scale_y_discrete(name = "Color") +
+  scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+  ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+  theme_minimal()
+
+```
+\
+That's a good start, you can already see the difference in quality. But there is still more to be done.
+
+## Ordering
+The order of elements on a plot and its legend can affect the overall readability. When your data has discrete categories, such as paint colors in our example, it makes sense to order the elements on the plot by some numerical quantity. You can use counts, frequencies, or simply raw numerical values that correspond to the categories, and in this case we will use the frequency of paint usage.
+```{r}
+
+# Use mutate and fct_reorder functions to reorder elements in dataframe
+paint_data %>% mutate(color_name = fct_reorder(color_name, frequency)) %>%
+  ggplot(aes(x = frequency, y = color_name)) + 
+  geom_col() +
+  scale_y_discrete(name = "Color") +
+  scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+  ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+  theme_minimal()
+
+```
+\
+Look at the huge difference that ordering makes, now you can easily tell the most and least common paints used. 
+
+Now let's use an example to address the ordering of a plot legend. In my [Data Visualizations for the 2023 NBA Season](https://rosswoleben.com/projects/2023-nba) post, I had a plot showing the all-time leading scorers in the NBA. In this plot, I put LeBron James on the top of the legend, as he has the most overall points. This order is much more inuitive than having the legend by ordered alphabetically, which is the ggplot default.
+
+
+```{r}
+# Read in NBA scoring data
+nba_data <- read_csv('https://raw.githubusercontent.com/ross-wgh/MSDS_Notes/main/May2023/Data_Visualization_and_Exploration/nba_scoring_leaders.csv', show_col_types = F)
+
+# Make function as the plotting code will be the exact same - only the input (data) will be changed
+nba_plot <- function(data){
+  ggplot(data, aes(x = Age, y = CumePoints, color = Player)) +
+  geom_line(linewidth = 1.1, key_glyph = 'rect') + 
+  scale_x_continuous(
+    breaks = seq(from = 18, to = 42, by = 2),
+    expand = expansion(mult = c(0.01, .03)),
+    name = "Player Age"
+  ) +
+  scale_y_continuous(name = 'Total Points', expand = expansion(mult = c(0.02, .05))) +
+  ggtitle("NBA All-Time Leading Scorers (Regular Season)") + theme_minimal() + 
+  theme(text = element_text(size = 12),
+        legend.position = c(.85, .3))
+}
+
+# Plot without changing the order (ggplot defaults to ordering players alphabetically)
+nba_plot(nba_data)
+
+# Use mutate to reorder the players
+nba_data_ordered <- nba_data %>% mutate(Player = fct_relevel(Player, "LeBron James", "Kareem Abdul-Jabbar", "Karl Malone", "Kobe Bryant", "Michael Jordan", "Kevin Durant", "Luka Doncic"))
+
+# Plot with the legend ordered by the top scorers
+nba_plot(nba_data_ordered)
+
+```
+\
+This may seem like a subtle change, but now you can clearly see the rankings of the top scorers, as well their scoring over time. You may notice that the colors are slightly different than what you see in the final plot on my website, so let's address that now.
+
+## Color 
+
+Picking the right set of colors can make a huge difference in the reception of a plot. You may have noticed that the Bob Ross paintings plot we've been working with still feels incomplete: it should have color! It can be a laborious challenge to come up with a good color scheme for your plot, but luckily the data we're working with gives us an intuitive set of colors to work with - the paint colors in the data set.
+
+```{r}
+
+# Putting our ideas of Themes and Labels, Ordering, and Color together...
+paint_data %>% mutate(color_name = fct_reorder(color_name, frequency)) %>%
+  ggplot(aes(x = frequency, y = color_name, fill = hex_value)) + # Use fill aesthetic to map colors onto the bars of plot
+  geom_col(color = 'black', fill = paint_data$hex_value) + 
+  scale_y_discrete(name = "Color") +
+  scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+  ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+  theme_minimal()
+
+```
+\
+Now this is a publication-quality plot! It has clear labels, an order that makes for easy comparisons, and a visually appealing and informative color scheme.
+
+When working with data that does not have an implied set of colors to use, you may need to employ some color theory. Although there are several different color spaces that have their own strengths and weaknesses, the Hue-Chroma-Luminance (HCL) color space is a pretty solid option. This color space devises a system that takes some of the guesswork out of selecting a palette. Conveniently, the colorspace package in R provides some universally applicable color palettes as well as an R Shiny application (`colorspace::choose_color()`) that can be used to create a complementary color palette. Let's look at two examples of color palettes that I quickly made with this app.
+
+```{r}
+
+# Color palette that works well if you want to use a gradient of greens
+greens <- c("#1B6C42", "#448A61", "#67A981", "#89C9A1", "#ABEBC2")
+swatchplot(greens)
+
+# Color palette with colors that all have the same luminance values - provides a nice pastel look
+colors <- c("#5C9E76", "#3E9EA1", "#7992BB", "#AF81B3", "#BF7F8D")
+swatchplot(colors)
+
+```
+\
+As I mentioned, its important to consider what data your custom color palettes are being used for. If your data is continuous, then a subtle transition between those  shades of green may be a good option. If your data is discrete, the second color palette with several different hues may be a good option. There are several color palettes within the tidyverse that fill specific niches, but understanding what colors work with each other unlocks another level of creative potential when creating your visualizations.
+
+
+## Useful Packages
+There were 3 really cool packages that I learned this semester. I already gave a brief summary of them in the main website post, so I'll just run a quick demo of each here:
+
+#### patchwork
+```{r}
+
+# First store the subplots into variables so they are easier to manipulate
+bar_plot <-
+  paint_data %>% mutate(color_name = fct_reorder(color_name, frequency)) %>%
+    ggplot(aes(x = frequency, y = color_name, fill = hex_value)) +
+    geom_col(color = 'black', fill = paint_data$hex_value) +
+    scale_y_discrete(name = "Color", labels = NULL) +
+    scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+    ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+    theme_minimal() + 
+    theme(text = element_text(size = 7))
+
+pie_plot <-
+  paint_data %>% mutate(color_name = fct_reorder(color_name, frequency)) %>%
+    ggplot(aes(x = frequency, '', fill = hex_value)) +
+    geom_col(fill = paint_data$hex_value) +
+    scale_y_discrete(name = "Color") +
+    scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+    ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+    coord_polar() +
+    theme_void() + 
+    theme(text = element_text(size = 7))
+
+# Use basic operators (+, /, |) to create compound figure
+bar_plot | pie_plot
+
+# Here there is a slight issue with the titles overlapping that can be fixed with some slightly more complex 
+# code, but for a quick demo, it gives a pretty good impression of what patchwork can do.
+(bar_plot | pie_plot) / (pie_plot + bar_plot)
+
+
+```
+
+#### ggiraph
+```{r}
+
+# Before creating the interactive plot, we need to add a label for each bar
+paint_data$label <- paste(paint_data$color_name, ": ", paint_data$frequency)
+
+bob_ross_interactive <- 
+  paint_data %>% mutate(color_name = fct_reorder(color_name, frequency)) %>%
+  ggplot(aes(x = frequency, y = color_name, fill = hex_value)) + 
+  # use geom_col_interactive instead of geom_col to create interactive element with ggiraph
+  geom_col_interactive(aes(data_id= color_name, tooltip = label), color = 'black', fill = paint_data$hex_value) + 
+  scale_y_discrete(name = "Color") +
+  scale_x_continuous(name = "Frequency", expand = expansion(mult = c(0, 0.02))) +
+  ggtitle("Most Frequent Colors in Bob Ross Paintings") +
+  theme_minimal()
+
+# use girafe function to render the plot
+girafe(
+  ggobj = bob_ross_interactive,
+  options = list(
+    # These options customize the javascript and css for the plot
+    opts_hover(css = "fill-opacity: 0.01;"),
+    opts_hover_inv(css = "opacity: 0.3;")
+  )
+)
+
+```
+
+#### sf
+```{r, results = 'hide'}
+# Doesn't make sense to make a full demo here, as I'll shortly touch upon geospatial data, so just take note 
+# of the multi-polygon objects in the geometry column of this sf-dataframe
+
+# get_acs() is a function from the tidycensus package that makes it incredibly easy to get geometries for US land area
+united_states <-
+  get_acs(
+    geography = "county",
+    # This variables argument corresponds to per capita income, but it doesn't really matter for our use;
+    variables = "B19013_001", 
+    year = 2020,
+    # We are mainly interested in grabbing the geometries of the US for drought data
+    geometry = TRUE
+  )
+```
+```{r}
+united_states
+```
+## Geospatial Data
+In the course, we primarily focused on choropleth maps, which use colors to represent an aggregated measurement across a geographic area. There are plenty of resources online to find some interesting data (US Census data gives a ton of information), but you may need to do some manipulating to get it in a sf-compatible format. Here is an example using drought data for all counties in the contiguous states.
+```{r}
+
+# This example was inspired by Julia Silge's post at https://juliasilge.com/blog/drought-in-tx/
+# Read in data from GitHub repository
+drought_raw <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2022/2022-06-14/drought-fips.csv')
+
+# Only select observations from the year 2021
+drought_us <- drought_raw %>%
+  filter(lubridate::year(date) == 2021) %>%
+  group_by(GEOID = FIPS) %>%
+  summarise(DSCI = mean(DSCI)) %>%
+  ungroup()
+
+
+drought_united_states <- united_states %>% 
+  # Ignore drought data for Puerto Rico, Hawaii, and Alaska for a more compact map
+  filter(GEOID < '72000' & 
+         (GEOID < '02000' | GEOID > '03000') &
+         (GEOID < '15000' | GEOID > '16000')) %>% 
+  # Join US Geometry to drought data
+  left_join(drought_us)
+
+drought_united_states %>%
+  ggplot(aes(fill = DSCI)) +
+  # Use geom_sf to display simple features geometry into a ggplot
+  geom_sf(alpha = 0.9, color = NA) +
+  scale_fill_continuous_sequential(palette = "Inferno", begin = 0.15, rev = FALSE) + 
+  # ^ Use color scheme that makes sense for droughts
+  ggtitle("2021 United States Drought Severity and Coverage Index (DSCI)") +
+  theme_minimal() +
+  theme(legend.position = c(.95, .3))
+```  
+
+
+## Resources:
+The creator of ggplot, Hadley Wickham, has an excellent resource that discusses both basic and complex programming concepts in R. It is available at https://adv-r.hadley.nz/introduction.html
+
+The professor of my "Data Visualization and Exploration" course, Claus Wilke, has published an e-book that provides an overview of the topics discussed in the class. I highly recommend it for those even remotely interested in data, as it offers a code-free approach to discussing general considerations of data visualization
+visualization.* It is available at https://clauswilke.com/dataviz/ 
+
+ggplot2 has an excellent documentation/stylistic guide for plotting https://ggplot2-book.org/
+
+
+See my article at https://www.rosswoleben.com/projects/data-vis for further discussion.
