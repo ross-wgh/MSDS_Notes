@@ -1,0 +1,431 @@
+---
+title: "Advanced Regression Techniques"
+author: "Ross Woleben"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(glmnet)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(dplyr)
+library(ggrepel)
+```
+
+This document is a supplement to my website post [Advanced Regression Techniques](https://www.rosswoleben.com/projects/adv-reg), where I discuss the interesting regression concepts I learned in my "Foundations of Regression and Modeling" course. The post on my website introduces the general ideas of each concept without going into the mathematical details. In an effort to help elucidate the ideas presented, this document will provide derivations and simulation studies.
+
+
+### A Note About Simulations
+Simulation studies are a great method to show the theoretical capabilities of various regression techniques because you know the true parameters from which you generate your data. In data where you do not know the true parameters, additional measures need to be taken to evaluate the performance of a model. 
+
+## Ridge Regression
+When you have data with collinearity - high correlations between predictor variables - basic linear models tend to struggle with calculating correct coefficient estimates. Ridge Regression tries to fix this problem by applying a transformation to ordinary least squares (OLS). 
+
+OLS is defined as:
+$$ \hat\beta = (X'X)^{-1} X'y$$
+\
+where $X$ is an $\text{n x p}$ (sample size  by  # of predictors) matrix and y is the response.
+
+Ridge Regression is defined as:
+$$ \hat\beta_R = (X'X + \Lambda)^{-1} X'y$$
+\
+where $\Lambda$ is a diagonal matrix of a positive constant $\lambda$. Applying this transformation reduces the variances of each predictor's coefficient estimate. If $X'X = D$, then $Var(\hat{\beta_{Rj}}) = \sigma^2 \frac{d_j}{(d_j + \lambda_j)^2}$, where $d_j$ are the diagonal elements of $D$. This comes from the fact that instead of minimizing $(y - X\beta)'(y-X\beta)$ as in the case of OLS, you minimize $(y - X\beta)'(y-X\beta) + \lambda ||\beta||^2$, where $||\beta||$ is the magnitude of the true predictor coefficients. 
+
+This reduction in variances comes at the expense of a slight bias. OLS is an unbiased estimator, but ridge regression is still expected to perform better it lowers the overall MSE.
+
+$$ E \hat\beta_{Rj} = \beta_j \frac{d_j}{d_j + \lambda}$$
+$$ Bias (\hat\beta_{Rj}) = E \hat\beta_{Rj} - \beta_j = \beta_j \frac{d_j}{d_j + \lambda} - \beta_j = -\beta_j \frac{\lambda}{d_j + \lambda}$$
+\
+This means that as you increase your $\lambda$, $\frac{\lambda}{d_j + \lambda} \to 1$,  making your ridge estimate shrink towards 0 and giving your estimators have a high bias. If $\lambda$ is very small, you aren't reducing as much variance and your estimators will be quite close to the OLS estimates.
+
+
+## Variable Selection: LASSO
+LASSO is similar to Ridge regression, but provides the additional flexibility of setting a predictor's coefficient to zero, implying that it shouldn't be included in the model.
+
+Ridge regression and LASSO both rely on the idea of regularization, a mechanism to calibrate the optimized fit of a parameter:
+$$ (y - X\beta)'(y - X\beta) + P(\beta) $$
+where $P(\beta)$ is a penalty term that needs to be optimized.
+
+The premise of LASSO is to minimize $(y - X\beta)'(y - X\beta)$ subject to $\Sigma_{j=1}^p |\beta_j| \le t$ where $t$ determines the degree of regularization. This can also be written as $||\beta||_1 \le t$ in the Lagrangian form, meaning that the magnitude of $\beta$ is less than $t$ . 
+
+Now the minimization problem becomes
+$$(y - X\beta)'(y - X\beta) + \lambda||\beta||_1 $$
+which looks quite similar to the minimization problem in Ridge. However, this function can be simplified to
+$$y'y - 2\beta \beta_{OLS} + \beta'\beta + \lambda ||\beta||_1 $$
+and after minimizing, the function looks like $$(\beta - \beta_{OLS})'(\beta-\beta_{OLS}) + \lambda ||\beta||_1 $$
+This implies that our LASSO estimate is a shrinkage estimator, meaning that it is strictly smaller than the OLS estimator. This strict inequality $\hat\beta_j = \beta_{OLS} *max(0, 1 - \frac{\frac{1}{2}\lambda}{\beta_{OLS}})$ gives LASSO the flexibility to shrink the estimate to or near 0.
+
+In contrast, the ridge estimator can be simplified to $\hat\beta_R = \frac{\beta_{OLS}}{1+\lambda}$, which can only be 0 if the OLS estimator is 0.
+
+Similar to Ridge regression, if $\lambda$ is very small, then you are not reducing the variance much and you achieve the OLS estimators. However, in the LASSO, as $\lambda \to \infty$, then all coefficient estimates become 0.
+
+
+
+
+
+
+Of course, the LASSO needs to have an optimal $\lambda$ to be its most effective. It is often found programatically with cross validation methods.
+
+
+Now that we've defined the mathematical motivations of ridge regression and LASSO, lets generate some data and compare their fits to an OLS linear model.
+```{r, echo = F}
+set.seed(1)
+
+#define x values
+# x1-x4 will be defined by the standard uniform distribution
+values <- runif(400)
+x1 <- values[1:100]
+x2 <- values[101:200]
+x3 <- values[201:300]
+x4 <- values[301:400]
+
+# make x5 correlated with x1 so there is collinearity
+x5 <-  x1 + .01 * rnorm(100)
+
+# true coefficients
+b <- c(2, -1, 3, -2, 0)
+```
+```{r}
+# Linear model: y = b1x1 + b2x2 + b3x3 + b4x4 + noise
+# the coefficient of x5 is 0 as it is not used for y 
+y <- 2*x1 - x2 + 3*x3 - 2*x4 + .1 * rnorm(100)
+```
+
+```{r, echo = F}
+data <- data.frame(y = y, x1 = x1, x2 = x2, x3 = x3, x4 = x4, x5 = x5)
+
+X <- as.matrix(data[, 2:6])
+```
+
+```{r}
+
+linear_model <- lm(y ~ x1 + x2 + x3 + x4 + x5, data = data)
+
+# Display results of model
+summary(linear_model)
+
+```
+\
+As expected, the estimates for x1 and x5 have a high variance and are incorrect. Let's start with ridge regression to adjust our estimates:
+
+```{r}
+# First lets take a look at our eigenvalues and X'X
+
+# The smallest eigenvalue of this predictor matrix is .00524, this causes a high variance for some of the other predictors
+eigen(t(X) %*% X)$val
+
+# This represents the diagonal values in (X'X)^-1 = D^-1
+diag(solve(t(X) %*% X))
+
+cv_ridge <- cv.glmnet(X, data$y, alpha = 0)
+best_ridge <- cv_ridge$lambda.min
+ridge_model <- glmnet(X, data$y, lambda = best_ridge)
+coef(ridge_model)
+
+```
+\
+These estimates are much more reasonable, but are still not great. $x1$ is much closer to its true value, and $x5$ shrunk towards 0, but $x5$ shouldn't be present in the model at all. Let's try LASSO and see if we can get an even better fit.
+
+```{r}
+# find optimal lambda value for LASSO in R with cross validation
+cv_lasso <- cv.glmnet(X, data$y)
+
+best_lasso <- cv_lasso$lambda.min
+best_lasso
+
+
+lasso_model <- glmnet(X, data$y, lambda = best_lasso)
+coef(lasso_model)
+```
+
+LASSO estimates look spot on! Lastly, let's show these differences in estimates between the OLS linear model, ridge regression, and LASSO graphically:
+
+
+```{r, echo = FALSE}
+# Let's create a dataframe that contains all of our coefficient estimates to display them graphically
+
+estimates <-
+  data.frame(
+    Method = c(
+      rep("True Parameters", 5),
+      rep("OLS Linear Model", 5),
+      rep("Ridge Regression", 5),
+      rep("LASSO", 5)
+    ) ,
+    parameter = rep(c(
+      '\U03B2 1', '\U03B2 2', '\U03B2 3', '\U03B2 4', '\U03B2 5'
+    ), 4),
+    coefficient_estimate = c(
+      b,
+      c(1.0223,-.992, 3.033,-1.9952, .9496),
+      c(1.2547,-.6678, 2.723,-1.7019, .4923),
+      c(1.9567,-.9756, 3.0215,-1.9803, .0043)
+    )
+  )
+
+estimates <- estimates %>% mutate(Method = fct_relevel(Method, "True Parameters", "OLS Linear Model", "Ridge Regression", "LASSO")) 
+
+b1 <- estimates %>% filter(parameter == '\U03B2 1') %>% ggplot(aes(x = parameter, y = coefficient_estimate, color = Method)) + geom_point(size = 5, alpha = .5) + theme_minimal() + scale_x_discrete(name = "") + scale_y_continuous(name = "") + theme(legend.position = "none")
+
+b2 <-
+  estimates %>% filter(parameter == '\U03B2 2') %>% ggplot(aes(x = parameter, y = coefficient_estimate, color = Method)) + geom_point(size = 5, alpha = .5) + theme_minimal() + scale_x_discrete(name = "") + scale_y_continuous(name = "") + theme(legend.position = "none")
+
+b3 <-
+  estimates %>% filter(parameter == '\U03B2 3') %>% ggplot(aes(x = parameter, y = coefficient_estimate, color = Method)) + geom_point(size = 5, alpha = .5) + theme_minimal() + scale_x_discrete(name = "") + scale_y_continuous(name = "")
+
+b4 <-
+  estimates %>% filter(parameter == '\U03B2 4') %>% ggplot(aes(x = parameter, y = coefficient_estimate, color = Method)) + geom_point(size = 5, alpha = .5) + theme_minimal() + scale_x_discrete(name = "") + scale_y_continuous(name = "Coefficient Estimate") + theme(legend.position = "none", axis.title.y = element_text(hjust = 2.6))
+
+b5 <-
+  estimates %>% filter(parameter == '\U03B2 5') %>% ggplot(aes(x = parameter, y = coefficient_estimate, color = Method)) + geom_point(size = 5, alpha = .5) + theme_minimal() + scale_x_discrete(name = "Parameter") + scale_y_continuous(name = "") + theme(legend.position = "none", axis.title.x = element_text(hjust = -.5))
+
+(b1 + b2 + b3) / (b4 + b5) + plot_annotation(title = 'Estimates Using Different Regression Techniques')
+
+```
+\
+
+## Mediation and the Sobel Test
+In the simple linear model $y_i = \beta_0 + \beta_1 x_i + \epsilon_i$, $x_i$ is the sole predictor for $y_i$. However, some situations arise where there is a mediator variable $m_i$ that is truly predicting $y_i$ instead of $x_i$. This mechanism suggests that $x_i$ predicts $m_i$, and in turn, $m_i$ predicts $y_i$. This poses the question: which of $x \to m \to y$ and $x, m \to y$ is more valid.
+
+This relationship can be defined by two linear models:
+$$m_i = \alpha_0 + \alpha_1 x_i + \epsilon_{1i}$$
+$$y_i = \beta_0 + \beta_1 m_i + \epsilon_{2i}$$
+Technically, $y_i$ can be written as $y_i =\beta_0 + \beta_1 (\alpha_0 + \alpha_1 x_i + \epsilon_{1i}) + \epsilon_{2i}$, but this model is more complicated, so its better to just go with $y_i = \beta_0 + \beta_1 m_i + \epsilon_{2i}$ if there truly is a mediating mechanism.
+
+To test if there is a mediation effect, we have to look at three models (and rewrite the parameters to make the test more intuitive):
+$$\text{Model 1:  } y_i = \beta_{11} + \beta_{12} x_i + \epsilon_i$$
+$$\text{Model 2:  } m_i = \beta_{21} + \beta_{22} x_i + \epsilon_i$$
+$$\text{Model 3:  } y_i = \beta_{31} + \beta_{32} m_i + \beta_{33} x_i + \epsilon_i$$
+
+There is no mediation effect if $\beta_{22} = 0$ or $\beta_{32} = 0$, and in each of those cases $\beta_{12} = \beta_{33}$. So our hypothesis for this test is $H_0: \beta_{12} = \beta_{33}$ .
+
+Under the null hypothesis, $\text{E(}\hat\beta_{12} - \hat\beta_{33} \text{)}= 0$ and $Var(\hat\beta_{12} - \hat\beta_{33})$ can be approximated by $\hat\beta_{22}^2 Var(\hat\beta_{32}) + \hat\beta_{32}Var(\hat\beta_{22})$. $\hat\beta_{12} - \hat\beta_{33}$ is approximately normal, so the test statistic is defined as $Z = \frac{\hat\beta_{12} - \hat\beta_{33}}{\sqrt{\hat\beta_{22}^2 Var(\hat\beta_{32}) + \hat\beta_{32}Var(\hat\beta_{22})}}$.
+With all of that defined, lets run a simulation.
+
+```{r}
+# In this example, there will be mediation!
+
+# Generate x values
+x <- rnorm(100)
+
+# m can be predicted by x
+m <- 1 + 2 * x + rnorm(100)
+
+# y can be predicted by only m
+y <- 2 - 3 * m + rnorm(100)
+```
+
+```{r}
+# Let's our three possible linear models: 
+
+# Model 1
+summary(lm(y~x))$coefficients
+
+# Model 2
+summary(lm(m~x))$coefficients
+
+# Model 3
+summary(lm(y~m+x))$coefficients
+```
+So the relevant coefficients for our tests are:
+
+$$\hat\beta_{11} = -.5785;\text{ } \hat\beta_{12} = -5.9288$$
+$$\hat\beta_{21} = .903;\text{ }  \hat\beta_{22} = 1.938$$
+$$\hat\beta_{32} = -3.032;\text{ }  \hat\beta_{33} = -0.051$$
+$$Var(\hat\beta_{22}) = 0.09589^2;\text{ }Var(\hat\beta_{32}) =0.11722^2$$
+\
+leading to a test statistic of $Z = \frac{-5.9288 +.051}{1.93830^2*0.11722^2 + -3.03249^2 *0.09589^2}  = -15.927$,
+so we appropriately reject the null hypothesis that there is no mediation effect.
+
+## Iterative Algorithms
+Most methods of regression do not have closed form solutions, so iterative algorithms often have to be utilized to optimize relevant functions. And although the functions can take many different forms, the idea is often the same: find a set of parameters that maximize or minimize the defined function. One shortcoming of iterative algorithms is the need to start at a reasonable guess for your parameters, as your algorithm is not guaranteed to converge for any initial condition.
+
+Here is one example: the Newton-Raphson algorithm
+$$\theta_{t+1} = \theta_{t} - \frac{f'(\theta_t)}{f''(\theta_t)}$$
+
+Note: the algorithm above is used to find local minimums and maximums. You can slightly change the algorithm to $\theta_{t+1} = \theta_{t} - \frac{f(\theta_t)}{f'(\theta_t)}$ to find the roots of the function of interest.
+
+Let's demonstrate this algorithm with the function $f(x) = .75x^4 - x^3 - 1.5x^2 + x + .5$
+```{r, echo = FALSE}
+x = seq(from = -1.4, to = 2.1, by = .01)
+
+data = data.frame(x = x, y = .75*x^4 - x^3 - 1.5 * x^2 + x + .5, lab = rep("", 351))
+data[62,3] = "(-0.793, -0.441)"
+data[169,3] = "(0.278, 0.645)"
+data[292,3] = "(1.515, -0.954)"
+
+ggplot(data, aes(x, y)) + 
+  geom_line() + 
+  geom_text_repel(
+    aes(label = lab),
+    max.overlaps = Inf
+  ) +
+  scale_y_continuous(name = 'f(x)') +
+  theme_minimal_grid()
+
+```
+\
+As you can see, this function has local minimums at $(-0.793, -0.441)$ and $(0.278, 0.645)$, and a local maximum at 
+$(1.515, -0.954)$. Let's use iterative algorithms to find some of these points.
+
+First we need to calculate the first and second derivatives:
+$$f'(x) = 3x^3 - 3x^2 - 3x + 1$$
+$$f''(x) = 9x^2 - 6x - 3$$
+
+Let's start at two different points to see the results: $x = -0.5$ and $x = 1.1$
+
+$$x_0 = -0.5; \text{ }x_1 = -0.5 - \frac{f'(-0.5)}{f''(-0.5)} = -0.5 - \frac{1.375}{2.25} = -1.111$$
+$$x_2 = -1.111 - \frac{f'(-1.111)}{f''(-1.111)} = -1.111 - \frac{-3.484}{14.775} = -0.8752$$
+$$x_3 = -0.8752 - \frac{f'(-0.8752)}{f''(-0.8752)} = -0.8752 - \frac{-0.683}{9.145}= -0.80$$
+$$x_4 = -0.8 - \frac{f'(-0.8)}{f''(-0.8)} = -0.8 - \frac{-0.056}{7.56} = -0.793$$
+$$x_5 = -0.793 - \frac{f'(-0.793)}{f''(-0.793)} = -0.793 - \frac{-0.004}{7.417641} = -0.793$$
+And we can see that our algorithm converges to the x value (parameter) of a local minimum as expected.
+
+Let's perform the algorithm with the start point of x = 1.1. 
+
+Note: we are not using $x_0 =1$, because we know that the function is perfectly linear at x = 1, meaning that the second derivative will be zero. This isn't usually a problem in most optimization problems, because it is rare for complex function to be exactly linear.
+$$x_0 = 1.1;\text{ } x_1 = 1.1 - \frac{f'(1.1)}{f''(1.1)} =  1.1 - \frac{-1.937}{1.29} = 2.602$$
+$$x_2 = 2.602 - \frac{f'(2.602)}{f''(2.602)} =  2.602 -  \frac{25.733}{42.322} = 1.994$$
+$$x_3 = 1.994 - \frac{f'(1.994)}{f''(1.994)} =  1.994 -  \frac{6.875}{20.820} = 1.664$$
+$$x_4 = 1.664 - \frac{f'(1.664)}{f''(1.664)} =  1.664 - \frac{1.524}{11.936} = 1.536$$
+$$x_5 = 1.536 - \frac{f'(1.536)}{f''(1.536)} =  1.536 - \frac{0.186}{9.018} = 1.515$$
+$$x_6 = 1.515 - \frac{f'(1.515)}{f''(1.515)} =  1.515 - \frac{.001}{8.567} = 1.515$$
+
+Once again, our function converges to a local extrema!
+
+## Poisson Regression and Generalized Linear Model
+If you come across discrete data, using OLS or other linear regression techniques is likely to fail. However, we can still perform regression by reparameterizing the data, which is the general idea of Generalized Linear Models (GLMs).
+
+Let's start off with a Poisson Regression approach before diving into the details of GLMs. In this setting, our goal is find a maximum likelihood estimator. So lets start with the likelihood function, then find $L$, our log-likelihood:
+$$l(a,b) = \Pi_{i=1}^n exp[y_i(a + bx_i) - exp(a + bx_i)]$$
+$$log(l(a,b)) = L(a,b) = an \bar y + b \sum_{i=1}^n x_i y_i - e^a \sum_{i=1}^n e^{bx_i}$$
+
+There is no closed-form solution to find our parameters, so we need to use a numerical method, such as Newton-Raphson, to find our estimate for a and b. However, since we are trying to optimize a multi-dimensional function, we need to make a slight adjustment to the algorithm. We still need to pick initial values of a, b and update them after each iteration, but we now need to use partial derivatives.
+
+$$(a,b)_{t+1} = (a,b)_t - J^{-1}(a,b)_t L'(a,b){_t}$$
+
+where $J(a,b) =$ $\left(\begin{array}{cc} \frac{\partial ^2L}{\partial ^2a} & \frac{\partial ^2L}{\partial a \partial b}\\\frac{\partial ^2L}{\partial a \partial b} & \frac{\partial ^2L}{\partial ^2b}\end{array}\right)$ = $\left(\begin{array}{cc} -e^a \sum_{i=1}^n e^{bx_i} & - e^a \sum_{i=1}^n x_i e^{bx_i}\\ - e^a \sum_{i=1}^n x_i e^{bx_i} & - e^a \sum_{i=1}^n x_i^2e^{bx_i}\end{array}\right)$ and $L'(a,b)$ is the first order partial derivatives
+
+Now that we have a framework to find our estimates, we need to figure out the properties of the estimates for confidence intervals
+
+When writing (a,b) as $\theta$, we have $\hat\theta \approx -L'(\theta)J^{-1}(\theta)$, where $E L'(\theta) = 0$, since that's where we expect to arrive at our optimal $\theta$. With this result $E (\hat\theta) = \theta$, making it an unbiased estimator. Since our \hat\theta is multidimensional, variance is defined by a covariance matrix: $Cov(\hat\theta) = J^{-1}(\theta)Cov(L'(\theta))J{-1}(\theta)$. We already know $J^{-1}$, so all we need to do is calculate $Cov(L'(\theta))$. We know that $L'(\theta)$ can be written as $(\frac{\partial L}{\partial a}, \frac{\partial L}{\partial b})$ and if we write $\lambda_i = exp(a + bx_i)$ then $\frac{\partial L}{\partial a} = \sum_{i=1}^n (y_i - \lambda_i); \text{ } \frac{\partial L}{\partial b}= \sum_{i=1}^n x_i(y_i - \lambda_i)$. To continue the derivation: $Var\frac{\partial L}{\partial a} = \sum_{i=1}^n \lambda_i; \text{ } \frac{\partial L}{\partial b}= \sum_{i=1}^n x_i^2\lambda_i$, $COV(\frac{\partial L}{\partial a}, \frac{\partial L}{\partial b}) = \sum_{i=1}^n x_i\lambda_i$
+
+So our estimator has the properties $\hat\theta \approx N(\theta, \left(\begin{array}{cc} \sum_{i=1}^n \lambda_i & \sum_{i=1}^n x_i\lambda_i\\\sum_{i=1}^n x_i\lambda_i & \sum_{i=1}^n x_i^2\lambda_i\end{array}\right))$)
+
+
+Fitting a regression model to Poisson data can also be done with a Generalized Linear Model (GLM), although the process is slightly different. GLMs are designed to work with data from any distribution in the exponential family. The probability distribution function of the exponential is as follows: $p(y|\theta) = exp(\frac{y\theta - b(\theta)}{a(\phi)} + c(y, \phi))$ where $\theta$ is our parameter(s) of interests, c and a are known functions, and $\phi$ is a known constant.
+
+For the poisson distribution: $b(\theta) = exp(\theta), a(\phi) = 1, \lambda = exp(\theta)$
+
+The log-likelihood is defined as $L(\theta) = \sum_{i=1}^n \frac{y_i\theta-b(\theta)}{a(\phi)}$
+and its first derivative: $L'(\theta) = \sum_{i=1}^n \frac{y_i-b'(\theta)}{a(\phi)} = 0$
+
+Since the distributions of the exponential families can have different domains (for Normal $x \in (-\infty,\infty)$ and for Poisson $x \in (0, \infty)$), we need a link function to map the mean to the predictor function. Here is some notation so our predictors are unbounded: $\eta_i = x_i'\beta$;  $\mu_i = b'(\theta_i)$; $g(\mu_i) = \eta_i$. The poisson model uses $g(\mu) = log\mu$ because the mean of the Poisson Distribtuion ($\mu$) is always positive, so $g(\mu) \in (-\infty,\infty)$. 
+
+With the introduction of this link function, we can update our log-likelihood to include our vector of estimates $\beta$: $L(\beta) = \sum_{i=1}^n \frac{y_i\theta_i - b(\theta_i)}{a_i(\phi)}$. To solve this derivative, we need to use the chain rule: $\frac{\partial L}{\partial \beta_j} = \frac{\partial L}{\partial \theta} \frac{\partial \theta}{\partial \mu} \frac{\partial \mu}{\partial \eta} \frac{\partial \eta}{\partial \beta_j}$ = $\sum_{i=1}^n \frac{y_i - \mu_i}{a_i} \frac{1}{b''(\theta_i)} \frac{\partial \mu}{\partial \eta} x_{ij}$ for all j = 1,...p, where p is the total number of predictor variables.
+
+We can now perform iterative weighted least squares to solve for our parameters. We define our $nxn$ weight matrix $W$ as $W_i^{(0)} = (\frac{\partial \mu}{\partial \eta})^2 \frac{1}{a_ib''(\theta_i)}$ and set up a linear model $z_i^{(0)}$ such that $z_i^{(0)} = x'_i\beta + \frac{1}{\sqrt{W_i^{(0)}}}\epsilon_i$. With this framework, our iterative algorithm becomes $\beta^{t+1} = (X'W^{(t)}X)^{-1} X'W^{(t)}z^{(t)}$ and we pick reasonable guesses of $\beta$ in hopes of convergence.
+
+For hypothesis and confidence intervals: our estimator properties are $\hat\beta \approx N(\beta , (X'WX)^{-1})$
+
+## Nonparametric Regression, Splines and Kernel Methods
+The goal of nonparametric regression is to model the data without making any assumptions about its parameters. This is accomplished by finding a smooth function that fits the data well without overfitting. This smoothing process adapts the minimization problem $min_m \sum_{i=1}^n (y_i - m(x_i))^2$ where $m(x_i)$ is a generalized function of x for both Splines and Kernel Methods.
+
+Kernel methods require the use of a kernel function, which essentially defines how nearby predictor variables should be weighted in the calculation of $m(x)$. A simple kernel function looks like $w_{i,h}(x) = \frac{I(|x - x_i|<h)}{\sum_{i=1}^n I(|x - x_i|<h)}$ where h is chosen as a cutoff point and is known as the kernel radius. This function means that if the predictor is within distance h of another set of predictors, it is given a weight 1/(the total number of predictor values within the cutoff). This ensures that predictors near each other will have similar values for $m(x_i)$. If this defined h value is near 0, there is no smoothing, and $m(x_i) = y_i$ for all x, and as $h \to \infty$, $m(x_i)=\bar y$ as it is taking all values into consideration - both are not ideal. 
+
+Let's do a quick example:
+```{r}
+x <- seq(from = -1.4, to = 2.1, by = .01)
+# Let's use the function we used to show our iterative algorithm
+y <- .75*x^4 - x^3 - 1.5*x^2 + x + .5 + .1 * rnorm(351)
+
+m_x_k1 <- rep(0, 351)
+m_x_k2 <- rep(0, 351)
+m_x_k3 <- rep(0, 351)
+
+# Calculate m(xi) with different kernel radii
+for (i in 1:351){
+  numer_1 <- sum(y * ifelse(abs(x[i] - x) < .02, 1, 0))
+  denom_1 <- sum(ifelse(abs(x[i] - x) < .02, 1, 0))
+  m_x_k1[i] <- numer_1/denom_1
+  
+  numer_2 <- sum(y * ifelse(abs(x[i] - x) < .15, 1, 0))
+  denom_2 <- sum(ifelse(abs(x[i] - x) < .15, 1, 0))
+  m_x_k2[i] <- numer_2/denom_2
+  
+  numer_3 <- sum(y * ifelse(abs(x[i] - x) < 1.5, 1, 0))
+  denom_3 <- sum(ifelse(abs(x[i] - x) < 1.5, 1, 0))
+  m_x_k3[i] <- numer_3/denom_3
+    
+}
+
+data <- data.frame(x = x, y = y, m_x_k1 = m_x_k1, m_x_k2 = m_x_k2, m_x_k3 = m_x_k3)
+ggplot(data, aes(x = x, y = y)) + geom_line() + 
+  geom_line(aes(x = x, y = m_x_k1, color = "h = 0.02"), linetype = 'dashed', linewidth = 1) +
+  geom_line(aes(x = x, y = m_x_k2, color = "h = 0.15"), linetype = 'dashed', linewidth = 1.1) +
+  geom_line(aes(x = x, y = m_x_k3, color = "h = 1.5"), linetype = 'dashed', linewidth = 1.1) +
+  scale_y_continuous(name = "m(x)") +
+  scale_color_manual(name = "Kernel Radius",
+                     breaks = c('h = 0.02', 'h = 0.15', 'h = 1.5'),
+                     values = c('h = 0.02' = '#FF98AC', 
+                                'h = 0.15' = '#6FCA77', 'h = 1.5' = '#25C6EA')) +
+  ggtitle("Function Smoothing with Kernel Method") +
+  theme_bw() +
+  theme(legend.position = c(.8, .8), legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "black"))
+```
+\
+As you can see, a small kernel radius of 0.02 starts to model the noise of the function, which is never a good thing. On the other hand, a large kernel radius of 1.5 is way to smooth and doesn't capture the actual function at all. A radius of 0.15 does a good job of capturing the function without overfitting. 
+
+There are many different kernel functions, so it you may need to research the strengths and weakness of your kernel of choice.
+
+
+Splines smooth the data by using piecewise polynomial functions. The polynomial functions are defined by $(\phi_j(x))_{j=1:K}$ and $m(x)$ is now defined as $m(x) = \beta_0 + \sum_{j=1}^K\beta_J\phi_j(x)$. However, to address the possibility of discontinuties between different polynomials, we can redefine the function to $m(x)=\beta_0 + \sum_{k=1}^{K-1}\beta_jx^j+\sum_{l=1}^{L}\beta_{K-1+l}(x - \kappa_l)_+^K$, where $\kappa_l$ represents knot points, or the markers for the transition between polynomials and the vector \beta can be found using least squares. A basis for degree K can be represented as $$1, x, ... x^{K-1}, (x-\kappa_1)^K,..., (x-\kappa_L)^K$$ 
+
+```{r}
+
+x <- seq(from = -1.4, to = 2.1, by = .01)
+# Let's use the function we used to show our iterative algorithm
+y <- .75*x^4 - x^3 - 1.5*x^2 + x + .5 + .1 * rnorm(351)
+
+X <- matrix(nrow = 351, ncol = 9)
+X[1:351, 1] = 1
+# Calculte m(x) Splines with
+# K = 4, L = 4
+for (i in 1:351){
+  X[i , 2] = x[i]
+  X[i , 3] = x[i]^2
+  X[i , 4] = x[i]^3
+  X[i , 5] = x[i]^4
+  X[i, 6] = (x[i]-1/5)^5
+  X[i, 7] = (x[i]-2/5)^5
+  X[i, 8] = (x[i]-3/5)^5
+  X[i, 9] = (x[i]-4/5)^5
+}
+
+#Calculate parameter estimates
+beta = solve(t(X)%*%X, tol = 1e-20) %*% t(X)%*%y
+beta
+
+m_x = rep(0,351)
+
+for (i in 1:351){
+  m_x[i] = beta[1] + beta[2]*x[i] +beta[3]*x[i]^2  + beta[4]*x[i]^3 + beta[5]*x[i]^4 + beta[6]*(x[i]-1/5)^5 + beta[7]*(x[i]-2/5)^5 + beta[8]*(x[i]-3/5)^5 + beta[9]*(x[i]-4/5)^5
+}
+
+data$m_x <- m_x
+
+ggplot(data, aes(x = x, y = y)) + geom_line() + 
+  geom_line(aes(x = x, y = m_x), linetype = 'dashed') +
+  scale_y_continuous(name = 'm(x)') +
+  theme_bw() + ggtitle("Function Smoothing With Polynomial Splines")
+
+```
+\
+This is a great fit! The only shortcoming is that the intercept term $\beta_0$ is slightly off, but our splines capture accurate polynomial coefficients for our predictor variables.
+
+For a less-mathematical overview of these topics, see my article at https://www.rosswoleben.com/projects/adv-reg.
+
